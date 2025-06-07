@@ -32,7 +32,7 @@ from utils.generate_prompts import get_click_prompt
 
 class EarlyStopping:
     """Early stopping utility class"""
-    def __init__(self, patience=15, min_delta=0.0001, mode='max', verbose=True):
+    def __init__(self, patience=10, min_delta=0.001, mode='max', verbose=True):
         """
         Args:
             patience (int): How many epochs to wait after last improvement
@@ -100,18 +100,18 @@ def main():
     parser.add_argument('--data_subset_ratio', type=float, default=0.02, help='Use only a fraction of training data (0.25 = 25% of data)')
     parser.add_argument('--val_subset_ratio', type=float, default=0.02, help='Use only a fraction of validation data (0.2 = 20% of data)')
     parser.add_argument('--n_gpu', type=int, default=1, help='total gpu')
-    parser.add_argument('--base_lr', type=float, default=0.0005, help='segmentation network learning rate, 0.005 for SAMed, 0.0001 for MSA')
+    parser.add_argument('--base_lr', type=float, default=0.0001, help='segmentation network learning rate')
     parser.add_argument('--warmup', type=bool, default=False, help='If activated, warp up the learning from a lower lr to the base_lr') 
-    parser.add_argument('--warmup_period', type=int, default=250, help='Warp up iterations, only valid whrn warmup is activated')
+    parser.add_argument('--warmup_period', type=int, default=100, help='Warp up iterations, only valid when warmup is activated')
     parser.add_argument('-keep_log', type=bool, default=False, help='keep the loss&lr&dice during training or not')
     parser.add_argument('--epochs', type=int, default=5, help='number of training epochs')
     parser.add_argument('--start_epoch', type=int, default=0, help='Starting epoch number (useful for resuming training)')
     
-    # NEW: Early stopping parameters
-    parser.add_argument('--early_stopping_patience', type=int, default=15, help='Number of epochs to wait for improvement before stopping')
-    parser.add_argument('--early_stopping_min_delta', type=float, default=0.0001, help='Minimum change to qualify as improvement')
+    # Optimized early stopping parameters for faster training
+    parser.add_argument('--early_stopping_patience', type=int, default=10, help='Number of epochs to wait for improvement before stopping')
+    parser.add_argument('--early_stopping_min_delta', type=float, default=0.001, help='Minimum change to qualify as improvement')
     
-    # NEW: WandB parameters
+    # WandB parameters
     parser.add_argument('--use_wandb', type=bool, default=True, help='Use Weights & Biases for logging')
     parser.add_argument('--wandb_project', type=str, default='medical-segmentation', help='WandB project name')
     parser.add_argument('--wandb_run_name', type=str, default=None, help='WandB run name (auto-generated if None)')
@@ -120,22 +120,16 @@ def main():
     opt = get_config(args.task) 
     
     # Override config epochs with command line argument
-    if hasattr(opt, 'epochs'):
-        opt.epochs = args.epochs
-    else:
-        setattr(opt, 'epochs', args.epochs)
+    opt.epochs = args.epochs
 
-    # NEW: Initialize WandB
+    # Initialize WandB FIRST with proper configuration
     if args.use_wandb:
-        # Set your API key
-        os.environ['WANDB_API_KEY'] = '4ac28743425731f3f01c3d7a2013e64ff47949cf'
-        
         # Generate run name if not provided
         if args.wandb_run_name is None:
             timestr = time.strftime('%m%d_%H%M')
-            args.wandb_run_name = f"{args.modelname}_{args.task}_{timestr}"
+            args.wandb_run_name = f"{args.modelname}_{args.task}_{timestr}_subset{args.data_subset_ratio}"
         
-        # Initialize wandb
+        # Initialize wandb with explicit configuration
         wandb.init(
             project=args.wandb_project,
             name=args.wandb_run_name,
@@ -156,12 +150,20 @@ def main():
                 'resume_checkpoint': args.resume_checkpoint,
                 'start_epoch': args.start_epoch,
                 'fine_tuning': True,
+                'image_size': f"{args.encoder_input_size}x{args.encoder_input_size}",
+                'architecture': 'SAMUS'
             },
-            tags=[args.modelname, args.task, 'fine-tuning']
+            tags=[args.modelname, args.task, 'fine-tuning', '256x256'],
+            notes=f"Fine-tuning {args.modelname} on {args.task} with {args.data_subset_ratio*100}% data subset"
         )
-        print(f"WandB initialized. Project: {args.wandb_project}, Run: {args.wandb_run_name}")
+        print(f"✅ WandB initialized successfully!")
+        print(f"   Project: {args.wandb_project}")
+        print(f"   Run: {args.wandb_run_name}")
+        print(f"   Dashboard: https://wandb.ai/{wandb.run.entity}/{wandb.run.project}/runs/{wandb.run.id}")
 
     device = torch.device(opt.device)
+    
+    # Optimized tensorboard logging
     if args.keep_log:
         logtimestr = time.strftime('%m%d%H%M')
         boardpath = opt.tensorboard_path + args.modelname + opt.save_path_code + logtimestr
@@ -169,8 +171,7 @@ def main():
             os.makedirs(boardpath)
         TensorWriter = SummaryWriter(boardpath)
 
-    #  =============================================================== add the seed to make sure the results are reproducible ==============================================================
-
+    # Set seed for reproducibility
     seed_value = 1234
     np.random.seed(seed_value)
     random.seed(seed_value)
@@ -179,36 +180,53 @@ def main():
     torch.cuda.manual_seed(seed_value)
     torch.cuda.manual_seed_all(seed_value)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
 
-    #  =========================================================================== model and data preparation ============================================================================
-    
+    # Model and data preparation
     model = get_model(args.modelname, args=args, opt=opt)
     opt.batch_size = args.batch_size * args.n_gpu
 
-    tf_train = JointTransform2D(img_size=args.encoder_input_size, low_img_size=args.low_image_size, ori_size=opt.img_size, crop=opt.crop, p_flip=0.0, p_rota=0.5, p_scale=0.5, p_gaussn=0.0,
-                                p_contr=0.5, p_gama=0.5, p_distor=0.0, color_jitter_params=None, long_mask=True)
-    tf_val = JointTransform2D(img_size=args.encoder_input_size, low_img_size=args.low_image_size, ori_size=opt.img_size, crop=opt.crop, p_flip=0, color_jitter_params=None, long_mask=True)
+    # Optimized transforms for faster training (reduced augmentation)
+    tf_train = JointTransform2D(
+        img_size=args.encoder_input_size, 
+        low_img_size=args.low_image_size, 
+        ori_size=opt.img_size, 
+        crop=opt.crop, 
+        p_flip=0.0,    # Reduced augmentation for speed
+        p_rota=0.2,    # Reduced from 0.5
+        p_scale=0.2,   # Reduced from 0.5
+        p_gaussn=0.0, 
+        p_contr=0.2,   # Reduced from 0.5
+        p_gama=0.2,    # Reduced from 0.5
+        p_distor=0.0, 
+        color_jitter_params=None, 
+        long_mask=True
+    )
     
-    # Load full datasets first
+    tf_val = JointTransform2D(
+        img_size=args.encoder_input_size, 
+        low_img_size=args.low_image_size, 
+        ori_size=opt.img_size, 
+        crop=opt.crop, 
+        p_flip=0, 
+        color_jitter_params=None, 
+        long_mask=True
+    )
+    
+    # Load datasets
     full_train_dataset = ImageToImage2D(opt.data_path, opt.train_split, tf_train, img_size=args.encoder_input_size)
     full_val_dataset = ImageToImage2D(opt.data_path, opt.val_split, tf_val, img_size=args.encoder_input_size)
     
     print(f"Full dataset sizes - Train: {len(full_train_dataset)}, Val: {len(full_val_dataset)}")
     
-    # NEW: Improved random subset selection with fixed seed for reproducibility
-    # Set a different seed for subset selection to ensure randomness while maintaining reproducibility
-    torch.manual_seed(seed_value + 42)  # Different seed for subset selection
+    # Create subsets with reproducible randomness
+    torch.manual_seed(seed_value + 42)
     
-    # Create random subsets
     if args.data_subset_ratio < 1.0:
         subset_size = int(len(full_train_dataset) * args.data_subset_ratio)
         train_indices = torch.randperm(len(full_train_dataset))[:subset_size]
         train_dataset = torch.utils.data.Subset(full_train_dataset, train_indices)
         print(f"Using {args.data_subset_ratio*100:.1f}% of training data: {len(train_dataset)} samples")
-        
-        # Log subset indices for reproducibility
-        if args.use_wandb:
-            wandb.log({"train_subset_size": len(train_dataset), "train_subset_ratio": args.data_subset_ratio})
     else:
         train_dataset = full_train_dataset
         print(f"Using full training dataset: {len(train_dataset)} samples")
@@ -218,54 +236,82 @@ def main():
         val_indices = torch.randperm(len(full_val_dataset))[:val_subset_size]
         val_dataset = torch.utils.data.Subset(full_val_dataset, val_indices)
         print(f"Using {args.val_subset_ratio*100:.1f}% of validation data: {len(val_dataset)} samples")
-        
-        # Log subset indices for reproducibility
-        if args.use_wandb:
-            wandb.log({"val_subset_size": len(val_dataset), "val_subset_ratio": args.val_subset_ratio})
     else:
         val_dataset = full_val_dataset
         print(f"Using full validation dataset: {len(val_dataset)} samples")
     
-    # Reset seed to original value for training
     torch.manual_seed(seed_value)
     
-    trainloader = DataLoader(train_dataset, batch_size=opt.batch_size, shuffle=True, num_workers=8, pin_memory=True)
-    valloader = DataLoader(val_dataset, batch_size=opt.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    # Optimized data loaders for speed
+    trainloader = DataLoader(
+        train_dataset, 
+        batch_size=opt.batch_size, 
+        shuffle=True, 
+        num_workers=4,  # Reduced from 8 for Colab
+        pin_memory=True,
+        persistent_workers=True,  # Keep workers alive
+        prefetch_factor=2         # Prefetch batches
+    )
+    
+    valloader = DataLoader(
+        val_dataset, 
+        batch_size=opt.batch_size, 
+        shuffle=False, 
+        num_workers=4,  # Reduced from 8 for Colab
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
+    )
 
     model.to(device)
     
-    # NEW: Load your trained SAMUS checkpoint for fine-tuning
+    # FIXED: Proper checkpoint loading
     checkpoint_loaded = False
     initial_dice = 0.0
     
+    print(f"\n{'='*80}")
+    print(f"CHECKPOINT LOADING")
+    print(f"{'='*80}")
+    
     if args.resume_checkpoint and os.path.exists(args.resume_checkpoint):
-        print(f"\n{'='*80}")
-        print(f"LOADING CHECKPOINT FOR FINE-TUNING")
-        print(f"Checkpoint Path: {args.resume_checkpoint}")
-        print(f"{'='*80}")
+        print(f"📁 Found checkpoint: {args.resume_checkpoint}")
         
         try:
             checkpoint = torch.load(args.resume_checkpoint, map_location=device)
+            print(f"📋 Checkpoint type: {type(checkpoint)}")
             
             # Handle different checkpoint formats
             if isinstance(checkpoint, dict):
-                # If checkpoint contains state_dict, optimizer, epoch info, etc.
+                print("📝 Checkpoint keys:", list(checkpoint.keys()))
+                
+                # Try different possible keys for model state
+                model_state_dict = None
                 if 'model_state_dict' in checkpoint:
                     model_state_dict = checkpoint['model_state_dict']
-                    if 'epoch' in checkpoint:
-                        args.start_epoch = checkpoint['epoch'] + 1
-                        print(f"Resuming from epoch: {args.start_epoch}")
-                    if 'best_dice' in checkpoint:
-                        initial_dice = checkpoint['best_dice']
-                        print(f"Previous best dice: {initial_dice:.4f}")
+                    print("✅ Found 'model_state_dict'")
                 elif 'state_dict' in checkpoint:
                     model_state_dict = checkpoint['state_dict']
+                    print("✅ Found 'state_dict'")
+                elif 'model' in checkpoint:
+                    model_state_dict = checkpoint['model']
+                    print("✅ Found 'model'")
                 else:
                     # Assume the entire dict is the state_dict
                     model_state_dict = checkpoint
+                    print("✅ Using entire checkpoint as state_dict")
+                
+                # Get additional info if available
+                if 'epoch' in checkpoint:
+                    args.start_epoch = checkpoint['epoch'] + 1
+                    print(f"📈 Resuming from epoch: {args.start_epoch}")
+                if 'best_dice' in checkpoint:
+                    initial_dice = checkpoint['best_dice']
+                    print(f"🎯 Previous best dice: {initial_dice:.4f}")
+                    
             else:
                 # Direct state_dict
                 model_state_dict = checkpoint
+                print("✅ Direct state_dict format")
             
             # Clean state dict keys (remove 'module.' prefix if present)
             new_state_dict = {}
@@ -275,200 +321,214 @@ def main():
                 else:
                     new_state_dict[k] = v
             
-            # Load the state dict
+            # Load the state dict with less strict matching for fine-tuning
             missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
             
             if missing_keys:
-                print(f"Warning: Missing keys in checkpoint: {missing_keys}")
+                print(f"⚠️  Missing keys: {len(missing_keys)} keys")
+                if len(missing_keys) < 10:
+                    for key in missing_keys[:5]:
+                        print(f"   - {key}")
+                    if len(missing_keys) > 5:
+                        print(f"   ... and {len(missing_keys)-5} more")
+                        
             if unexpected_keys:
-                print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys}")
+                print(f"⚠️  Unexpected keys: {len(unexpected_keys)} keys")
+                if len(unexpected_keys) < 10:
+                    for key in unexpected_keys[:5]:
+                        print(f"   - {key}")
+                    if len(unexpected_keys) > 5:
+                        print(f"   ... and {len(unexpected_keys)-5} more")
             
             checkpoint_loaded = True
-            print("✅ Checkpoint loaded successfully!")
-            print(f"Fine-tuning will continue from epoch {args.start_epoch}")
+            print("✅ Checkpoint loaded successfully for fine-tuning!")
             
         except Exception as e:
             print(f"❌ Error loading checkpoint: {str(e)}")
-            print("Training will start from scratch with pretrained weights...")
+            print("   Starting from pretrained weights instead...")
             checkpoint_loaded = False
     
-    elif args.resume_checkpoint:
-        print(f"⚠️  Checkpoint file not found: {args.resume_checkpoint}")
-        print("Training will start from scratch with pretrained weights...")
+    else:
+        print(f"⚠️  Checkpoint not found: {args.resume_checkpoint}")
+        print("   Will use pretrained weights instead...")
     
-    # Load original pretrained weights if checkpoint loading failed
-    if not checkpoint_loaded and opt.pre_trained:
-        print(f"Loading original pretrained weights from: {opt.load_path}")
-        checkpoint = torch.load(opt.load_path)
-        new_state_dict = {}
-        for k,v in checkpoint.items():
-            if k[:7] == 'module.':
-                new_state_dict[k[7:]] = v
-            else:
-                new_state_dict[k] = v
-        model.load_state_dict(new_state_dict)
+    # Load pretrained weights if checkpoint loading failed
+    if not checkpoint_loaded and hasattr(opt, 'pre_trained') and opt.pre_trained and hasattr(opt, 'load_path'):
+        print(f"🔄 Loading pretrained weights from: {opt.load_path}")
+        try:
+            pretrained = torch.load(opt.load_path, map_location=device)
+            new_state_dict = {}
+            for k, v in pretrained.items():
+                if k.startswith('module.'):
+                    new_state_dict[k[7:]] = v
+                else:
+                    new_state_dict[k] = v
+            model.load_state_dict(new_state_dict, strict=False)
+            print("✅ Pretrained weights loaded!")
+        except Exception as e:
+            print(f"⚠️  Could not load pretrained weights: {e}")
       
     if args.n_gpu > 1:
         model = nn.DataParallel(model)
     
+    # Optimized optimizer setup
     if args.warmup:
         b_lr = args.base_lr / args.warmup_period
-        optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=b_lr, betas=(0.9, 0.999), weight_decay=0.1)
+        optimizer = torch.optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()), 
+            lr=b_lr, 
+            betas=(0.9, 0.999), 
+            weight_decay=0.01,  # Reduced weight decay
+            eps=1e-8
+        )
     else:
-        b_lr = args.base_lr
-        optimizer = optim.Adam(model.parameters(), lr=args.base_lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0, amsgrad=False)
+        optimizer = optim.AdamW(  # Changed to AdamW for better performance
+            model.parameters(), 
+            lr=args.base_lr, 
+            betas=(0.9, 0.999), 
+            eps=1e-08, 
+            weight_decay=0.01,  # Small weight decay
+            amsgrad=False
+        )
    
     criterion = get_criterion(modelname=args.modelname, opt=opt)
 
     pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print("Total_params: {}".format(pytorch_total_params))
+    print(f"🔢 Total trainable parameters: {pytorch_total_params:,}")
     
-    # NEW: Log model parameters to WandB
+    # Log to WandB
     if args.use_wandb:
-        wandb.log({"total_parameters": pytorch_total_params})
+        wandb.log({
+            "total_parameters": pytorch_total_params,
+            "checkpoint_loaded": checkpoint_loaded,
+            "starting_epoch": args.start_epoch,
+            "initial_best_dice": initial_dice,
+            "train_samples": len(train_dataset),
+            "val_samples": len(val_dataset)
+        })
     
-    # NEW: Initialize Early Stopping
+    # Initialize Early Stopping with more aggressive settings
     early_stopping = EarlyStopping(
         patience=args.early_stopping_patience,
         min_delta=args.early_stopping_min_delta,
-        mode='max',  # We want to maximize dice score
+        mode='max',
         verbose=True
     )
     
     print(f"\n{'='*80}")
-    print(f"TRAINING SETUP:")
-    print(f"Mode: {'Fine-tuning from checkpoint' if checkpoint_loaded else 'Training from pretrained weights'}")
-    print(f"Starting Epoch: {args.start_epoch + 1}")
-    print(f"Total Epochs: {opt.epochs}")
-    print(f"Remaining Epochs: {opt.epochs - args.start_epoch}")
-    print(f"Batches per Epoch: {len(trainloader)}")
-    print(f"Total Iterations: {opt.epochs * len(trainloader)}")
-    print(f"Batch Size: {opt.batch_size}")
-    print(f"Model: {args.modelname}")
-    print(f"Checkpoint Loaded: {'Yes' if checkpoint_loaded else 'No'}")
+    print(f"TRAINING CONFIGURATION")
+    print(f"{'='*80}")
+    print(f"🎯 Mode: {'Fine-tuning from checkpoint' if checkpoint_loaded else 'Training from pretrained'}")
+    print(f"📅 Epochs: {args.start_epoch + 1} → {opt.epochs} (Total: {opt.epochs - args.start_epoch})")
+    print(f"🖼️  Image Size: {args.encoder_input_size}×{args.encoder_input_size}")
+    print(f"📦 Batch Size: {opt.batch_size}")
+    print(f"📊 Train Batches: {len(trainloader)}")
+    print(f"📈 Val Batches: {len(valloader)}")
+    print(f"🎓 Model: {args.modelname}")
+    print(f"⏰ Early Stopping: {args.early_stopping_patience} epochs patience")
+    print(f"📊 WandB: {'Enabled' if args.use_wandb else 'Disabled'}")
     if checkpoint_loaded:
-        print(f"Previous Best Dice: {initial_dice:.4f}")
-    print(f"Early Stopping Patience: {args.early_stopping_patience}")
-    print(f"WandB Logging: {'Enabled' if args.use_wandb else 'Disabled'}")
+        print(f"🎯 Previous Best Dice: {initial_dice:.4f}")
     print(f"{'='*80}\n")
 
-    #  ========================================================================= begin to train the model ============================================================================
-    iter_num = args.start_epoch * len(trainloader)  # Adjust iteration counter for resumed training
+    # Training loop
+    iter_num = args.start_epoch * len(trainloader)
     max_iterations = opt.epochs * len(trainloader)
-    best_dice = max(initial_dice, 0.0)  # Use loaded dice score as starting point
+    best_dice = max(initial_dice, 0.0)
     loss_log, dice_log = [], []
     best_model_path = None
     training_start_time = time.time()
     
-    # NEW: Log initial state to WandB
-    if args.use_wandb:
-        wandb.log({
-            "checkpoint_loaded": checkpoint_loaded,
-            "starting_epoch": args.start_epoch,
-            "initial_best_dice": best_dice,
-            "remaining_epochs": opt.epochs - args.start_epoch
-        })
-    
-    for epoch in range(args.start_epoch, opt.epochs):  # Start from the loaded epoch
+    for epoch in range(args.start_epoch, opt.epochs):
         model.train()
         train_losses = 0
         epoch_start_time = time.time()
         
-        print(f"\n{'='*60}")
-        print(f"EPOCH {epoch+1}/{opt.epochs} STARTED")
-        print(f"Fine-tuning Mode: {'Yes' if checkpoint_loaded else 'No'}")
-        print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"{'='*60}")
+        print(f"\n{'='*50}")
+        print(f"EPOCH {epoch+1}/{opt.epochs}")
+        print(f"{'='*50}")
         
-        for batch_idx, (datapack) in enumerate(trainloader):
-            imgs = datapack['image'].to(dtype = torch.float32, device=opt.device)
-            masks = datapack['low_mask'].to(dtype = torch.float32, device=opt.device)
-            bbox = torch.as_tensor(datapack['bbox'], dtype=torch.float32, device=opt.device)
+        for batch_idx, datapack in enumerate(trainloader):
+            imgs = datapack['image'].to(dtype=torch.float32, device=device, non_blocking=True)
+            masks = datapack['low_mask'].to(dtype=torch.float32, device=device, non_blocking=True)
+            bbox = torch.as_tensor(datapack['bbox'], dtype=torch.float32, device=device)
             pt = get_click_prompt(datapack, opt)
             
+            # Forward pass
             pred = model(imgs, pt, bbox)
             train_loss = criterion(pred, masks)
             
-            optimizer.zero_grad()
+            # Backward pass
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
             train_loss.backward()
             optimizer.step()
+            
             train_losses += train_loss.item()
             
-            # Enhanced batch progress tracking
-            if (batch_idx + 1) % 50 == 0 or batch_idx == 0:
-                elapsed_time = time.time() - epoch_start_time
-                progress_percent = ((batch_idx + 1) / len(trainloader)) * 100
+            # Progress logging (less frequent for speed)
+            if (batch_idx + 1) % 25 == 0 or batch_idx == 0:
+                progress = ((batch_idx + 1) / len(trainloader)) * 100
                 avg_loss = train_losses / (batch_idx + 1)
+                elapsed = time.time() - epoch_start_time
                 
-                print(f"  Batch [{batch_idx+1:4d}/{len(trainloader):4d}] "
-                      f"({progress_percent:5.1f}%) | "
+                print(f"  [{batch_idx+1:3d}/{len(trainloader):3d}] "
+                      f"({progress:5.1f}%) | "
                       f"Loss: {train_loss.item():.4f} | "
-                      f"Avg Loss: {avg_loss:.4f} | "
-                      f"Time: {elapsed_time:.1f}s")
+                      f"Avg: {avg_loss:.4f} | "
+                      f"Time: {elapsed:.1f}s")
                 
-                # NEW: Log batch metrics to WandB
-                if args.use_wandb:
+                # WandB logging (less frequent)
+                if args.use_wandb and (batch_idx + 1) % 50 == 0:
                     wandb.log({
                         "batch_loss": train_loss.item(),
                         "batch_avg_loss": avg_loss,
-                        "batch_progress": progress_percent,
-                        "batch_step": epoch * len(trainloader) + batch_idx
+                        "epoch_progress": progress,
+                        "step": epoch * len(trainloader) + batch_idx
                     })
             
-            # Learning rate adjustment (account for resumed training)
+            # Learning rate scheduling
             if args.warmup and iter_num < args.warmup_period:
                 lr_ = args.base_lr * ((iter_num + 1) / args.warmup_period)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr_
-            else:
-                if args.warmup:
-                    shift_iter = iter_num - args.warmup_period
-                    assert shift_iter >= 0, f'Shift iter is {shift_iter}, smaller than zero'
-                    lr_ = args.base_lr * (1.0 - shift_iter / max_iterations) ** 0.9
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = lr_
-            iter_num = iter_num + 1
+            elif args.warmup:
+                shift_iter = iter_num - args.warmup_period
+                lr_ = args.base_lr * (1.0 - shift_iter / max_iterations) ** 0.9
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr_
+                    
+            iter_num += 1
 
-        # Epoch completion logging
+        # Epoch summary
         epoch_time = time.time() - epoch_start_time
         avg_train_loss = train_losses / len(trainloader)
-        current_lr = optimizer.state_dict()['param_groups'][0]['lr']
+        current_lr = optimizer.param_groups[0]['lr']
         
-        print(f"\n{'='*60}")
-        print(f"EPOCH {epoch+1}/{opt.epochs} COMPLETED")
-        print(f"Training Loss: {avg_train_loss:.4f}")
-        print(f"Epoch Time: {epoch_time:.2f}s")
-        print(f"Learning Rate: {current_lr:.8f}")
+        print(f"\n📊 Epoch {epoch+1} Summary:")
+        print(f"   Loss: {avg_train_loss:.4f}")
+        print(f"   Time: {epoch_time:.1f}s")
+        print(f"   LR: {current_lr:.2e}")
         
-        # Store logs
         loss_log.append(avg_train_loss)
         
-        # Traditional logging
-        if args.keep_log:
-            TensorWriter.add_scalar('train_loss', avg_train_loss, epoch)
-            TensorWriter.add_scalar('learning rate', current_lr, epoch)
-
         # Validation
         if epoch % opt.eval_freq == 0:
-            print(f"Running validation...")
+            print(f"🔍 Running validation...")
             model.eval()
-            val_start_time = time.time()
-            dices, mean_dice, _, val_losses = get_eval(valloader, model, criterion=criterion, opt=opt, args=args)
-            val_time = time.time() - val_start_time
             
-            print(f"Validation Loss: {val_losses:.4f}")
-            print(f"Validation Dice: {mean_dice:.4f}")
-            print(f"Validation Time: {val_time:.2f}s")
+            with torch.no_grad():  # Disable gradients for validation
+                val_start = time.time()
+                dices, mean_dice, _, val_losses = get_eval(valloader, model, criterion=criterion, opt=opt, args=args)
+                val_time = time.time() - val_start
             
-            # Store validation metrics
+            print(f"📈 Validation Results:")
+            print(f"   Val Loss: {val_losses:.4f}")
+            print(f"   Val Dice: {mean_dice:.4f}")
+            print(f"   Val Time: {val_time:.1f}s")
+            
             dice_log.append(mean_dice)
             
-            # Traditional logging
-            if args.keep_log:
-                TensorWriter.add_scalar('val_loss', val_losses, epoch)
-                TensorWriter.add_scalar('dices', mean_dice, epoch)
-                
-            # NEW: WandB logging
+            # WandB logging
             if args.use_wandb:
                 wandb.log({
                     "epoch": epoch + 1,
@@ -480,112 +540,188 @@ def main():
                     "val_time": val_time
                 })
                 
-            # Model saving logic
+            # Model saving
             if mean_dice > best_dice:
                 if best_model_path and os.path.exists(best_model_path):
                     try:
                         os.remove(best_model_path)
-                        print(f"Removed previous best model: {os.path.basename(best_model_path)}")
-                    except OSError as e:
-                        print(f"Warning: Could not remove previous model file: {e}")
+                    except:
+                        pass
                 
                 best_dice = mean_dice
-                
                 timestr = time.strftime('%m%d%H%M')
+                
                 if not os.path.isdir(opt.save_path):
                     os.makedirs(opt.save_path)
                 
-                best_model_path = opt.save_path + args.modelname + opt.save_path_code + '_best_' + timestr + '_epoch' + str(epoch) + '_dice' + f'{best_dice:.4f}' + '_finetune.pth'
+                best_model_path = os.path.join(
+                    opt.save_path, 
+                    f'{args.modelname}{opt.save_path_code}_best_{timestr}_epoch{epoch}_dice{best_dice:.4f}_finetune.pth'
+                )
                 
-                # NEW: Save checkpoint with additional info for future resuming
+                # Save comprehensive checkpoint
                 checkpoint_data = {
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': model.module.state_dict() if hasattr(model, 'module') else model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'epoch': epoch,
                     'best_dice': best_dice,
                     'loss_log': loss_log,
                     'dice_log': dice_log,
-                    'args': vars(args)
+                    'args': vars(args),
+                    'model_config': {
+                        'modelname': args.modelname,
+                        'encoder_input_size': args.encoder_input_size,
+                        'low_image_size': args.low_image_size
+                    }
                 }
-                torch.save(checkpoint_data, best_model_path, _use_new_zipfile_serialization=False)
-                print(f"NEW BEST MODEL SAVED! Dice: {best_dice:.4f}")
-                print(f"Saved as: {os.path.basename(best_model_path)}")
                 
-                # NEW: Log best model to WandB
+                torch.save(checkpoint_data, best_model_path)
+                print(f"💾 NEW BEST MODEL SAVED!")
+                print(f"   Dice: {best_dice:.4f}")
+                print(f"   Path: {os.path.basename(best_model_path)}")
+                
                 if args.use_wandb:
-                    wandb.log({"best_dice": best_dice, "best_model_epoch": epoch + 1})
-                    # Optionally save model to WandB
-                    wandb.save(best_model_path)
+                    wandb.log({"best_dice": best_dice, "best_epoch": epoch + 1})
+                    # Save model artifact to WandB
+                    try:
+                        artifact = wandb.Artifact(f"model-{epoch}", type="model")
+                        artifact.add_file(best_model_path)
+                        wandb.log_artifact(artifact)
+                    except Exception as e:
+                        print(f"Warning: Could not save model artifact to WandB: {e}")
             
-            # NEW: Early stopping check
+            # Early stopping check
             if early_stopping(mean_dice):
-                print(f"\nTraining stopped early at epoch {epoch + 1}")
+                print(f"🛑 Early stopping triggered at epoch {epoch + 1}")
                 if args.use_wandb:
                     wandb.log({"early_stopped": True, "early_stop_epoch": epoch + 1})
                 break
         else:
-            # If no validation this epoch, append previous dice or 0
             dice_log.append(dice_log[-1] if dice_log else 0.0)
         
-        # Overall progress tracking
-        total_elapsed_time = time.time() - training_start_time
-        remaining_epochs = opt.epochs - (epoch + 1)
+        # Progress summary
+        total_elapsed = time.time() - training_start_time
         completed_epochs = (epoch + 1) - args.start_epoch
-        avg_epoch_time = total_elapsed_time / max(completed_epochs, 1)
-        estimated_remaining_time = remaining_epochs * avg_epoch_time
+        remaining_epochs = opt.epochs - (epoch + 1)
         
-        total_progress = ((epoch + 1) / opt.epochs) * 100
-        fine_tune_progress = (completed_epochs / max(opt.epochs - args.start_epoch, 1)) * 100
+        if completed_epochs > 0:
+            avg_epoch_time = total_elapsed / completed_epochs
+            eta = remaining_epochs * avg_epoch_time
+            
+            print(f"\n⏱️  Progress: {((epoch + 1) / opt.epochs) * 100:.1f}% complete")
+            print(f"   Elapsed: {total_elapsed/60:.1f} min")
+            print(f"   ETA: {eta/60:.1f} min")
+            print(f"   Best Dice: {best_dice:.4f}")
         
-        print(f"Overall Progress: {total_progress:.1f}% Complete")
-        print(f"Fine-tuning Progress: {fine_tune_progress:.1f}% Complete")
-        print(f"Total Elapsed: {total_elapsed_time/60:.1f} minutes")
-        print(f"Estimated Remaining: {estimated_remaining_time/60:.1f} minutes")
-        print(f"Best Dice So Far: {best_dice:.4f}")
-        print(f"{'='*60}")
-        
-        # Save logs
+        # Traditional logging
         if args.keep_log:
-            with open(opt.tensorboard_path + args.modelname + opt.save_path_code + logtimestr + '/trainloss.txt', 'w') as f:
-                for loss in loss_log:
-                    f.write(str(loss)+'\n')
-            with open(opt.tensorboard_path + args.modelname + opt.save_path_code + logtimestr + '/dice.txt', 'w') as f:
-                for dice in dice_log:
-                    f.write(str(dice)+'\n')
+            TensorWriter.add_scalar('train_loss', avg_train_loss, epoch)
+            TensorWriter.add_scalar('learning_rate', current_lr, epoch)
+            if epoch % opt.eval_freq == 0:
+                TensorWriter.add_scalar('val_loss', val_losses, epoch)
+                TensorWriter.add_scalar('val_dice', mean_dice, epoch)
     
-    # Final training summary
-    total_training_time = time.time() - training_start_time
+    # Training completion
+    total_time = time.time() - training_start_time
     final_epoch = epoch + 1
     completed_epochs = final_epoch - args.start_epoch
     
     print(f"\n{'='*80}")
-    print(f"FINE-TUNING COMPLETED!")
-    print(f"Starting Epoch: {args.start_epoch + 1}")
-    print(f"Final Epoch: {final_epoch}")
-    print(f"Epochs Completed in This Session: {completed_epochs}")
-    print(f"Total Training Time (This Session): {total_training_time/60:.2f} minutes ({total_training_time/3600:.2f} hours)")
-    print(f"Final Best Dice Score: {best_dice:.4f}")
-    print(f"Best Model Saved As: {os.path.basename(best_model_path) if best_model_path else 'No model saved'}")
-    print(f"Average Time per Epoch: {total_training_time/max(completed_epochs, 1):.2f} seconds")
-    print(f"Early Stopping: {'Yes' if early_stopping.early_stop else 'No'}")
-    print(f"Checkpoint Loaded at Start: {'Yes' if checkpoint_loaded else 'No'}")
+    print(f"🎉 TRAINING COMPLETED!")
+    print(f"{'='*80}")
+    print(f"📅 Epochs: {args.start_epoch + 1} → {final_epoch} (Completed: {completed_epochs})")
+    print(f"⏱️  Total Time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
+    print(f"⚡ Avg Time/Epoch: {total_time/completed_epochs:.1f}s")
+    print(f"🎯 Best Dice Score: {best_dice:.4f}")
+    
+    if best_model_path:
+        print(f"💾 Best Model: {os.path.basename(best_model_path)}")
+    
+    print(f"📊 Final Training Loss: {loss_log[-1]:.4f}")
+    print(f"📈 Final Validation Dice: {dice_log[-1]:.4f}")
     print(f"{'='*80}")
     
-    # NEW: Final WandB logging
+    # Final WandB logging
     if args.use_wandb:
         wandb.log({
-            "final_best_dice": best_dice,
-            "total_training_time_minutes": total_training_time/60,
-            "epochs_completed_this_session": completed_epochs,
-            "final_epoch": final_epoch,
-            "avg_time_per_epoch": total_training_time/max(completed_epochs, 1),
-            "early_stopped": early_stopping.early_stop,
-            "fine_tuning_completed": True
+            "training_completed": True,
+            "total_training_time": total_time,
+            "total_epochs_completed": completed_epochs,
+            "final_train_loss": loss_log[-1],
+            "final_val_dice": dice_log[-1],
+            "best_dice_final": best_dice
         })
+        
+        # Create summary table
+        summary_data = {
+            "Total Training Time (hours)": f"{total_time/3600:.2f}",
+            "Epochs Completed": completed_epochs,
+            "Best Dice Score": f"{best_dice:.4f}",
+            "Final Train Loss": f"{loss_log[-1]:.4f}",
+            "Final Val Dice": f"{dice_log[-1]:.4f}",
+            "Model Path": os.path.basename(best_model_path) if best_model_path else "None"
+        }
+        
+        wandb.summary.update(summary_data)
+        print("📊 WandB summary updated!")
         
         # Finish WandB run
         wandb.finish()
-        print("WandB run completed and synced!")
+        print("✅ WandB run completed!")
+    
+    # Save final training logs
+    if args.keep_log:
+        log_data = {
+            'loss_log': loss_log,
+            'dice_log': dice_log,
+            'best_dice': best_dice,
+            'total_time': total_time,
+            'epochs_completed': completed_epochs,
+            'args': vars(args)
+        }
+        
+        timestr = time.strftime('%m%d%H%M')
+        log_path = os.path.join(opt.save_path, f'training_log_{timestr}.pkl')
+        
+        try:
+            import pickle
+            with open(log_path, 'wb') as f:
+                pickle.dump(log_data, f)
+            print(f"📋 Training logs saved: {log_path}")
+        except Exception as e:
+            print(f"⚠️  Could not save training logs: {e}")
+        
+        # Close tensorboard writer
+        TensorWriter.close()
+        print("📊 TensorBoard logs closed!")
+    
+    # Memory cleanup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print("🧹 GPU memory cleared!")
+    
+    print(f"\n🚀 Training script completed successfully!")
+    
+    return {
+        'best_dice': best_dice,
+        'best_model_path': best_model_path,
+        'loss_log': loss_log,
+        'dice_log': dice_log,
+        'total_time': total_time,
+        'epochs_completed': completed_epochs
+    }
+
 
 if __name__ == '__main__':
-    main()
+    try:
+        results = main()
+        print(f"✅ Script finished with best dice: {results['best_dice']:.4f}")
+    except KeyboardInterrupt:
+        print(f"\n⏹️  Training interrupted by user!")
+        if 'args' in locals() and args.use_wandb:
+            wandb.finish(exit_code=1)
+    except Exception as e:
+        print(f"\n❌ Training failed with error: {str(e)}")
+        if 'args' in locals() and args.use_wandb:
+            wandb.finish(exit_code=1)
+        raise
