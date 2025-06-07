@@ -1,0 +1,4 @@
+dataset/*.png
+dataset/**/*.png
+checkpoints/*.pth
+checkpoints/**/*.pth
