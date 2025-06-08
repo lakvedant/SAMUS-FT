@@ -30,6 +30,8 @@ from utils.loss_functions.sam_loss import get_criterion
 from utils.generate_prompts import get_click_prompt
 
 
+
+
 class EarlyStopping:
     """Early stopping utility class"""
     def __init__(self, patience=10, min_delta=0.001, mode='max', verbose=True):
@@ -84,6 +86,7 @@ class EarlyStopping:
             
         return False
 
+wandb.login(key='4ac28743425731f3f01c3d7a2013e64ff47949cf')
 
 def main():
     #  ============================================================================= parameters setting ====================================================================================
@@ -95,7 +98,7 @@ def main():
     parser.add_argument('--task', default='US30K', help='task or dataset name')
     parser.add_argument('--vit_name', type=str, default='vit_b', help='select the vit model for the image encoder of sam')
     parser.add_argument('--sam_ckpt', type=str, default='checkpoints/sam_vit_b_01ec64.pth', help='Pretrained checkpoint of SAM')
-    parser.add_argument('--resume_checkpoint', type=str, default='checkpoints/SAMUS.pth', help='Path to trained SAMUS checkpoint to resume from')
+    parser.add_argument('--resume_checkpoint', type=str, default='/content/drive/MyDrive/US30K/SAMUS.pth', help='Path to trained SAMUS checkpoint to resume from')
     parser.add_argument('--batch_size', type=int, default=8, help='batch_size per gpu')
     parser.add_argument('--data_subset_ratio', type=float, default=0.02, help='Use only a fraction of training data (0.25 = 25% of data)')
     parser.add_argument('--val_subset_ratio', type=float, default=0.02, help='Use only a fraction of validation data (0.2 = 20% of data)')
@@ -504,7 +507,7 @@ def main():
         avg_train_loss = train_losses / len(trainloader)
         current_lr = optimizer.param_groups[0]['lr']
         
-        print(f"\n📊 Epoch {epoch+1} Summary:")
+        print(f"\n Epoch {epoch+1} Summary:")
         print(f"   Loss: {avg_train_loss:.4f}")
         print(f"   Time: {epoch_time:.1f}s")
         print(f"   LR: {current_lr:.2e}")
@@ -513,7 +516,7 @@ def main():
         
         # Validation
         if epoch % opt.eval_freq == 0:
-            print(f"🔍 Running validation...")
+            print(f" Running validation...")
             model.eval()
             
             with torch.no_grad():  # Disable gradients for validation
@@ -521,7 +524,7 @@ def main():
                 dices, mean_dice, _, val_losses = get_eval(valloader, model, criterion=criterion, opt=opt, args=args)
                 val_time = time.time() - val_start
             
-            print(f"📈 Validation Results:")
+            print(f" Validation Results:")
             print(f"   Val Loss: {val_losses:.4f}")
             print(f"   Val Dice: {mean_dice:.4f}")
             print(f"   Val Time: {val_time:.1f}s")
@@ -608,7 +611,7 @@ def main():
             avg_epoch_time = total_elapsed / completed_epochs
             eta = remaining_epochs * avg_epoch_time
             
-            print(f"\n⏱️  Progress: {((epoch + 1) / opt.epochs) * 100:.1f}% complete")
+            print(f"\n⏱  Progress: {((epoch + 1) / opt.epochs) * 100:.1f}% complete")
             print(f"   Elapsed: {total_elapsed/60:.1f} min")
             print(f"   ETA: {eta/60:.1f} min")
             print(f"   Best Dice: {best_dice:.4f}")
@@ -627,15 +630,15 @@ def main():
     completed_epochs = final_epoch - args.start_epoch
     
     print(f"\n{'='*80}")
-    print(f"🎉 TRAINING COMPLETED!")
+    print(f"TRAINING COMPLETED!")
     print(f"{'='*80}")
-    print(f"📅 Epochs: {args.start_epoch + 1} → {final_epoch} (Completed: {completed_epochs})")
-    print(f"⏱️  Total Time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
-    print(f"⚡ Avg Time/Epoch: {total_time/completed_epochs:.1f}s")
-    print(f"🎯 Best Dice Score: {best_dice:.4f}")
+    print(f"Epochs: {args.start_epoch + 1} → {final_epoch} (Completed: {completed_epochs})")
+    print(f"⏱Total Time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
+    print(f"Avg Time/Epoch: {total_time/completed_epochs:.1f}s")
+    print(f"Best Dice Score: {best_dice:.4f}")
     
     if best_model_path:
-        print(f"💾 Best Model: {os.path.basename(best_model_path)}")
+        print(f"Best Model: {os.path.basename(best_model_path)}")
     
     print(f"📊 Final Training Loss: {loss_log[-1]:.4f}")
     print(f"📈 Final Validation Dice: {dice_log[-1]:.4f}")
@@ -717,11 +720,11 @@ if __name__ == '__main__':
         results = main()
         print(f"✅ Script finished with best dice: {results['best_dice']:.4f}")
     except KeyboardInterrupt:
-        print(f"\n⏹️  Training interrupted by user!")
+        print(f"\n⏹  Training interrupted by user!")
         if 'args' in locals() and args.use_wandb:
             wandb.finish(exit_code=1)
     except Exception as e:
-        print(f"\n❌ Training failed with error: {str(e)}")
+        print(f"\n Training failed with error: {str(e)}")
         if 'args' in locals() and args.use_wandb:
             wandb.finish(exit_code=1)
         raise

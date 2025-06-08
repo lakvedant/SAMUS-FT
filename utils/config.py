@@ -68,7 +68,7 @@ class Config_BUSI:
     # This dataset is for breast cancer segmentation
     data_path = "/content/drive/MyDrive/US30K"
     data_subpath = "/content/drive/MyDrive/SAMUS/US30K/Breast-BUSI/"   
-    save_path = "./checkpoints/SAMUS/"
+    save_path = "./content/drive/MyDrive/US30K/SAMUS.pth"
     result_path = "./result/BUSI/"
     tensorboard_path = "./tensorboard/BUSI/"
     load_path = save_path + "xxx.pth"
