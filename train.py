@@ -100,14 +100,14 @@ def main():
     parser.add_argument('--sam_ckpt', type=str, default='checkpoints/sam_vit_b_01ec64.pth', help='Pretrained checkpoint of SAM')
     parser.add_argument('--resume_checkpoint', type=str, default='/content/drive/MyDrive/US30K/SAMUS.pth', help='Path to trained SAMUS checkpoint to resume from')
     parser.add_argument('--batch_size', type=int, default=8, help='batch_size per gpu')
-    parser.add_argument('--data_subset_ratio', type=float, default=0.02, help='Use only a fraction of training data (0.25 = 25% of data)')
+    parser.add_argument('--data_subset_ratio', type=float, default=0.05, help='Use only a fraction of training data (0.25 = 25% of data)')
     parser.add_argument('--val_subset_ratio', type=float, default=0.02, help='Use only a fraction of validation data (0.2 = 20% of data)')
     parser.add_argument('--n_gpu', type=int, default=1, help='total gpu')
     parser.add_argument('--base_lr', type=float, default=0.0001, help='segmentation network learning rate')
     parser.add_argument('--warmup', type=bool, default=False, help='If activated, warp up the learning from a lower lr to the base_lr') 
     parser.add_argument('--warmup_period', type=int, default=100, help='Warp up iterations, only valid when warmup is activated')
     parser.add_argument('-keep_log', type=bool, default=False, help='keep the loss&lr&dice during training or not')
-    parser.add_argument('--epochs', type=int, default=5, help='number of training epochs')
+    parser.add_argument('--epochs', type=int, default=30, help='number of training epochs')
     parser.add_argument('--start_epoch', type=int, default=0, help='Starting epoch number (useful for resuming training)')
     
     # Optimized early stopping parameters for faster training
@@ -195,12 +195,12 @@ def main():
         low_img_size=args.low_image_size, 
         ori_size=opt.img_size, 
         crop=opt.crop, 
-        p_flip=0.0,    # Reduced augmentation for speed
-        p_rota=0.2,    # Reduced from 0.5
-        p_scale=0.2,   # Reduced from 0.5
+        p_flip=0.0,    
+        p_rota=0.2,    
+        p_scale=0.2,   
         p_gaussn=0.0, 
-        p_contr=0.2,   # Reduced from 0.5
-        p_gama=0.2,    # Reduced from 0.5
+        p_contr=0.2,   
+        p_gama=0.2,    
         p_distor=0.0, 
         color_jitter_params=None, 
         long_mask=True
@@ -469,7 +469,7 @@ def main():
             train_losses += train_loss.item()
             
             # Progress logging (less frequent for speed)
-            if (batch_idx + 1) % 25 == 0 or batch_idx == 0:
+            if (batch_idx + 1) % 2 == 0 or batch_idx == 0:
                 progress = ((batch_idx + 1) / len(trainloader)) * 100
                 avg_loss = train_losses / (batch_idx + 1)
                 elapsed = time.time() - epoch_start_time
