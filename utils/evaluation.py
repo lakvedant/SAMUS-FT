@@ -11,6 +11,7 @@ from hausdorff import hausdorff_distance
 from utils.visualization import visual_segmentation, visual_segmentation_binary, visual_segmentation_sets, visual_segmentation_sets_with_pt
 from einops import rearrange
 from utils.generate_prompts import get_click_prompt
+from utils.gradcam import SAMUSGradCAM
 import time
 import pandas as pd
 
@@ -29,6 +30,110 @@ def obtain_patien_id(filename):
         patientid = filename[:3]
     return patientid
 
+def initialize_gradcam(model, opt):
+    """Initialize GradCAM if visualization is enabled."""
+    if hasattr(opt, 'gradcam_visualization') and opt.gradcam_visualization:
+        # Try different layer combinations for SAMUS
+        possible_layers = [
+            ['image_encoder.neck.2', 'image_encoder.neck.0'],  # Neck layers 
+            # ['image_encoder.blocks.11.norm1', 'image_encoder.blocks.8.norm1'],  # Transformer blocks
+            # ['image_encoder.blocks.-1.norm1'],  # Last block
+        ]
+        
+        model_layers = [name for name, _ in model.named_modules()]
+        
+        for target_layers in possible_layers:
+            if all(layer in model_layers for layer in target_layers):
+                print(f"Using GradCAM layers: {target_layers}")
+                return SAMUSGradCAM(model, target_layers)
+        
+        # Fallback - use any available layer
+        available_layers = [name for name in model_layers if 'norm' in name or 'conv' in name]
+        if available_layers:
+            selected = available_layers[-2:] if len(available_layers) >= 2 else [available_layers[-1]]
+            print(f"Fallback GradCAM layers: {selected}")
+            return SAMUSGradCAM(model, selected)
+        
+        print("Warning: No suitable layers found for GradCAM")
+    return None
+
+
+def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx=0):
+    """Apply GradCAM visualization if enabled."""
+    if gradcam_obj is None or not hasattr(opt, 'gradcam_visualization') or not opt.gradcam_visualization:
+        return
+    
+    try:
+        # Ensure proper point format
+        if pt is None or len(pt) != 2:
+            print(f"Warning: Invalid pt format: {type(pt)}")
+            return
+            
+        coords_torch, labels_torch = pt
+        
+        # Handle batch dimensions properly
+        if coords_torch.dim() == 2:  # [num_points, 2]
+            pt_coords = coords_torch[0:1]  # First point
+            pt_labels = labels_torch[0:1]
+        elif coords_torch.dim() == 3:  # [batch_size, num_points, 2]
+            pt_coords = coords_torch[batch_idx, 0:1]  # First point of specified batch
+            pt_labels = labels_torch[batch_idx, 0:1]
+        else:
+            print(f"Warning: Unexpected coords shape: {coords_torch.shape}")
+            return
+        
+        # Prepare points for GradCAM
+        pt_for_gradcam = (pt_coords.unsqueeze(0), pt_labels.unsqueeze(0))
+        
+        # Generate CAM
+        cam = gradcam_obj.generate_cam(imgs[batch_idx:batch_idx+1], pt_for_gradcam)
+        
+        # Convert image for visualization
+        img_tensor = imgs[batch_idx]
+        
+        # Handle 3D image
+        if img_tensor.dim() == 4:  # [C, H, W, D]
+            # Take middle slice
+            img_np = img_tensor[:, :, :, img_tensor.shape[-1]//2].permute(1, 2, 0).cpu().numpy()
+        else:  # [C, H, W]
+            img_np = img_tensor.permute(1, 2, 0).cpu().numpy()
+        
+        # Normalize image
+        if img_np.max() <= 1.0:
+            img_np = (img_np * 255).astype(np.uint8)
+        
+        # Convert points for visualization
+        points_np = pt_coords[0].cpu().numpy()  # [2]
+        
+        # Create save directory and path
+        gradcam_dir = os.path.join(opt.result_path, f"gradcam-{opt.modelname}")
+        os.makedirs(gradcam_dir, exist_ok=True)
+        
+        # Handle filename
+        if isinstance(image_filename, (list, tuple)):
+            filename = image_filename[batch_idx] if batch_idx < len(image_filename) else image_filename[0]
+        else:
+            filename = str(image_filename)
+        
+        base_name = os.path.splitext(filename)[0]
+        save_path = os.path.join(gradcam_dir, f"gradcam_{base_name}.png")
+        
+        # Generate visualization
+        gradcam_obj.visualize_cam(
+            original_image=img_np,
+            cam=cam,
+            points=points_np.reshape(1, -1),
+            save_path=save_path,
+            alpha=0.4
+        )
+        
+        print(f"GradCAM visualization saved to: {save_path}")
+        
+    except Exception as e:
+        print(f"GradCAM visualization failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
 def eval_mask_slice(valloader, model, criterion, opt, args):
     model.eval()
     val_losses, mean_dice = 0, 0
@@ -100,6 +205,7 @@ def eval_mask_slice2(valloader, model, criterion, opt, args):
     ious, accs, ses, sps = np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes))
     eval_number = 0
     sum_time = 0
+    gradcam_obj = initialize_gradcam(model, opt)
     for batch_idx, (datapack) in enumerate(valloader):
         imgs = Variable(datapack['image'].to(dtype = torch.float32, device=opt.device))
         masks = Variable(datapack['low_mask'].to(dtype = torch.float32, device=opt.device))
@@ -113,6 +219,8 @@ def eval_mask_slice2(valloader, model, criterion, opt, args):
             start_time = time.time()
             pred = model(imgs, pt)
             sum_time =  sum_time + (time.time()-start_time)
+        
+        apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx)
 
         val_loss = criterion(pred, masks)
         val_losses += val_loss.item()
@@ -286,6 +394,7 @@ def eval_patient(valloader, model, criterion, opt, args):
     tps, fps = np.zeros((patientnumber, opt.classes)), np.zeros((patientnumber, opt.classes))
     tns, fns = np.zeros((patientnumber, opt.classes)), np.zeros((patientnumber, opt.classes))
     hds = np.zeros((patientnumber, opt.classes))
+    gradcam_obj = initialize_gradcam(model, opt)
     for batch_idx, (datapack) in enumerate(valloader):
         imgs = Variable(datapack['image'].to(dtype = torch.float32, device=opt.device))
         masks = Variable(datapack['low_mask'].to(dtype = torch.float32, device=opt.device))
@@ -298,6 +407,8 @@ def eval_patient(valloader, model, criterion, opt, args):
 
         with torch.no_grad():
             pred = model(imgs, pt, bbox)
+
+        apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx)
 
         val_loss = criterion(pred, masks)
         val_losses += val_loss.item()
@@ -378,6 +489,7 @@ def eval_slice(valloader, model, criterion, opt, args):
     ious, accs, ses, sps = np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes))
     eval_number = 0
     sum_time = 0
+    gradcam_obj = initialize_gradcam(model, opt)
     for batch_idx, (datapack) in enumerate(valloader):
         imgs = datapack['image'].to(dtype = torch.float32, device=opt.device)
         masks = datapack['low_mask'].to(dtype = torch.float32, device=opt.device)
@@ -390,6 +502,7 @@ def eval_slice(valloader, model, criterion, opt, args):
             pred = model(imgs, pt)
             sum_time =  sum_time + (time.time()-start_time)
 
+        apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx)
         val_loss = criterion(pred, masks)
         val_losses += val_loss.item()
 

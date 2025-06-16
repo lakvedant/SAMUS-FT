@@ -250,10 +250,10 @@ def main():
         train_dataset, 
         batch_size=opt.batch_size, 
         shuffle=True, 
-        num_workers=4,  # Reduced from 8 for Colab
+        num_workers=4,  
         pin_memory=True,
-        persistent_workers=True,  # Keep workers alive
-        prefetch_factor=2         # Prefetch batches
+        persistent_workers=True,  
+        prefetch_factor=2        
     )
     
     valloader = DataLoader(
@@ -291,30 +291,30 @@ def main():
                 model_state_dict = None
                 if 'model_state_dict' in checkpoint:
                     model_state_dict = checkpoint['model_state_dict']
-                    print("✅ Found 'model_state_dict'")
+                    print(" Found 'model_state_dict'")
                 elif 'state_dict' in checkpoint:
                     model_state_dict = checkpoint['state_dict']
-                    print("✅ Found 'state_dict'")
+                    print(" Found 'state_dict'")
                 elif 'model' in checkpoint:
                     model_state_dict = checkpoint['model']
-                    print("✅ Found 'model'")
+                    print(" Found 'model'")
                 else:
                     # Assume the entire dict is the state_dict
                     model_state_dict = checkpoint
-                    print("✅ Using entire checkpoint as state_dict")
+                    print("Using entire checkpoint as state_dict")
                 
                 # Get additional info if available
                 if 'epoch' in checkpoint:
                     args.start_epoch = checkpoint['epoch'] + 1
-                    print(f"📈 Resuming from epoch: {args.start_epoch}")
+                    print(f" Resuming from epoch: {args.start_epoch}")
                 if 'best_dice' in checkpoint:
                     initial_dice = checkpoint['best_dice']
-                    print(f"🎯 Previous best dice: {initial_dice:.4f}")
+                    print(f" Previous best dice: {initial_dice:.4f}")
                     
             else:
                 # Direct state_dict
                 model_state_dict = checkpoint
-                print("✅ Direct state_dict format")
+                print(" Direct state_dict format")
             
             # Clean state dict keys (remove 'module.' prefix if present)
             new_state_dict = {}
@@ -347,7 +347,7 @@ def main():
             print("✅ Checkpoint loaded successfully for fine-tuning!")
             
         except Exception as e:
-            print(f"❌ Error loading checkpoint: {str(e)}")
+            print(f" Error loading checkpoint: {str(e)}")
             print("   Starting from pretrained weights instead...")
             checkpoint_loaded = False
     

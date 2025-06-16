@@ -187,7 +187,7 @@ class Mask_BCE_loss(nn.Module):
 
 def get_criterion(modelname='SAM', opt=None):
     device = torch.device(opt.device)
-    pos_weight = torch.ones([1]).cuda(device=device)*2
+    pos_weight = torch.ones([1], device=device) * 2
     if modelname == "SAMed":
         criterion = DC_and_BCE_loss(classes=opt.classes)
     elif modelname == "MSA":

@@ -1,8 +1,8 @@
 # This file is used to configure the training parameters for each task
 class Config_US30K:
     # This dataset contain all the collected ultrasound dataset
-    data_path = "/content/drive/MyDrive/US30K"  
-    save_path = "./checkpoints/SAMUS/"
+    data_path = "./main/dataset/SAMUS/US30K"  
+    save_path = "./main/checkpoints/"
     result_path = "./result/SAMUS/"
     tensorboard_path = "./tensorboard/SAMUS/"
     load_path = save_path + "xxx.pth"
@@ -21,7 +21,7 @@ class Config_US30K:
     crop = None                         # the cropped image size
     eval_freq = 1                       # the frequency of evaluate the model
     save_freq = 2000                    # the frequency of saving the model
-    device = "cuda"                     # training device, cpu or cuda
+    device = "cpu"                     # training device, cpu or cuda
     cuda = "on"                         # switch on/off cuda option (default: off)
     gray = "yes"                        # the type of input image
     img_channel = 1                     # the channel of input image
@@ -54,7 +54,7 @@ class Config_TN3K:
     crop = None                  # the cropped image size
     eval_freq = 1                # the frequency of evaluate the model
     save_freq = 2000               # the frequency of saving the model
-    device = "cuda"              # training device, cpu or cuda
+    device = "cpu"              # training device, cpu or cuda
     cuda = "on"                  # switch on/off cuda option (default: off)
     gray = "yes"                 # the type of input image
     img_channel = 1              # the channel of input image
@@ -66,12 +66,12 @@ class Config_TN3K:
 
 class Config_BUSI:
     # This dataset is for breast cancer segmentation
-    data_path = "/content/drive/MyDrive/US30K"
-    data_subpath = "/content/drive/MyDrive/SAMUS/US30K/Breast-BUSI/"   
-    save_path = "./content/drive/MyDrive/US30K/SAMUS.pth"
+    data_path = "/Users/lakshitvedant/Desktop/main/dataset/SAMUS"
+    data_subpath = "/Users/lakshitvedant/Desktop/main/dataset/SAMUS/Breast-BUSI"
+    save_path = "/Users/lakshitvedant/Desktop/main/checkpoints/"
     result_path = "./result/BUSI/"
     tensorboard_path = "./tensorboard/BUSI/"
-    load_path = save_path + "xxx.pth"
+    load_path = save_path + "SAMUS.pth"
     save_path_code = "_"
 
     workers = 1                         # number of data loading workers (default: 8)
@@ -87,7 +87,7 @@ class Config_BUSI:
     crop = None                         # the cropped image size
     eval_freq = 1                       # the frequency of evaluate the model
     save_freq = 2000                    # the frequency of saving the model
-    device = "cuda"                     # training device, cpu or cuda
+    device = "cpu"                     # training device, cpu or cuda
     cuda = "on"                         # switch on/off cuda option (default: off)
     gray = "yes"                        # the type of input image
     img_channel = 1                     # the channel of input image
@@ -120,7 +120,7 @@ class Config_CAMUS:
     crop = None                         # the cropped image size
     eval_freq = 1                       # the frequency of evaluate the model
     save_freq = 2000                    # the frequency of saving the model
-    device = "cuda"                     # training device, cpu or cuda
+    device = "cpu"                     # training device, cpu or cuda
     cuda = "on"                         # switch on/off cuda option (default: off)
     gray = "yes"                        # the type of input image
     img_channel = 1                     # the channel of input image
