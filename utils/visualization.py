@@ -8,6 +8,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from utils.imgname import read_img_name
 import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from matplotlib.lines import Line2D
+import os
 
 
 def visual_segmentation(seg, image_filename, opt):
@@ -152,3 +156,5 @@ def visual_segmentation_binary(seg, image_filename, opt):
     if not os.path.isdir(fulldir):
         os.makedirs(fulldir)
     cv2.imwrite(fulldir + image_filename, overlay)
+
+

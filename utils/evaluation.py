@@ -10,10 +10,12 @@ import utils.metrics as metrics
 from hausdorff import hausdorff_distance
 from utils.visualization import visual_segmentation, visual_segmentation_binary, visual_segmentation_sets, visual_segmentation_sets_with_pt
 from einops import rearrange
-from utils.generate_prompts import get_click_prompt
+from utils.generate_prompts import get_autoprompt_click_prompt, get_click_prompt
 from utils.gradcam import SAMUSGradCAM
 import time
 import pandas as pd
+from tqdm import tqdm
+
 
 def fix_bn(m):
     classname = m.__class__.__name__
@@ -35,7 +37,8 @@ def initialize_gradcam(model, opt):
     if hasattr(opt, 'gradcam_visualization') and opt.gradcam_visualization:
         # Try different layer combinations for SAMUS
         possible_layers = [
-            ['image_encoder.neck.2', 'image_encoder.neck.0'],  # Neck layers 
+            ['image_encoder.neck.2']
+            # ['image_encoder.neck.2', 'image_encoder.neck.0'],  # Neck layers 
             # ['image_encoder.blocks.11.norm1', 'image_encoder.blocks.8.norm1'],  # Transformer blocks
             # ['image_encoder.blocks.-1.norm1'],  # Last block
         ]
@@ -205,15 +208,18 @@ def eval_mask_slice2(valloader, model, criterion, opt, args):
     ious, accs, ses, sps = np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes)), np.zeros((max_slice_number, opt.classes))
     eval_number = 0
     sum_time = 0
+
     gradcam_obj = initialize_gradcam(model, opt)
-    for batch_idx, (datapack) in enumerate(valloader):
+
+    for batch_idx, datapack in enumerate(tqdm(valloader, desc="Evaluating", unit="batch")):
         imgs = Variable(datapack['image'].to(dtype = torch.float32, device=opt.device))
         masks = Variable(datapack['low_mask'].to(dtype = torch.float32, device=opt.device))
         label = Variable(datapack['label'].to(dtype = torch.float32, device=opt.device))
         class_id = datapack['class_id']
         image_filename = datapack['image_name']
 
-        pt = get_click_prompt(datapack, opt)
+        pt = get_autoprompt_click_prompt(datapack, model, gradcam_obj, opt, num_points=1)
+        # pt = get_click_prompt(datapack, opt)
 
         with torch.no_grad():
             start_time = time.time()

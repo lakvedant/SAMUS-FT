@@ -18,6 +18,7 @@ import random
 from utils.config import get_config
 from utils.evaluation import get_eval
 from importlib import import_module
+import cv2
 
 from torch.nn.modules.loss import CrossEntropyLoss
 from monai.losses import DiceCELoss
@@ -49,7 +50,7 @@ def main():
     
     # NEW: Add GradCAM specific arguments
     parser.add_argument('--enable_gradcam', action='store_true', default=True, help='Enable GradCAM visualization')
-    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-neck0', help='Directory to save GradCAM visualizations')
+    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-test2', help='Directory to save GradCAM visualizations')
 
     args = parser.parse_args()
     opt = get_config(args.task)  # please configure your hyper-parameter

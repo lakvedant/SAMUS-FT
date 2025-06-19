@@ -71,83 +71,83 @@ class SAMUSGradCAM:
             print(f"GradCAM generation failed: {e}")
             return self._get_zero_cam(image)
     
-    # def extract_high_activation_points(self, cam: np.ndarray, num_points: int = 1, 
-    #                                intensity_threshold: float = 0.8) -> np.ndarray:
-    #     """
-    #     Extract points from the darkest red regions (highest activation) of GradCAM.
+    def extract_high_activation_points(self, cam: np.ndarray, num_points: int = 1, 
+                                   intensity_threshold: float = 0.8) -> np.ndarray:
+        """
+        Extract points from the darkest red regions (highest activation) of GradCAM.
         
-    #     Args:
-    #         cam: GradCAM heatmap (2D numpy array)
-    #         num_points: Number of points to extract
-    #         intensity_threshold: Minimum intensity threshold (0-1) for considering a region
+        Args:
+            cam: GradCAM heatmap (2D numpy array)
+            num_points: Number of points to extract
+            intensity_threshold: Minimum intensity threshold (0-1) for considering a region
         
-    #     Returns:
-    #         points: Array of shape (num_points, 2) containing [x, y] coordinates
-    #     """
-    #     # Normalize CAM to 0-1 range
-    #     cam_min, cam_max = cam.min(), cam.max()
-    #     if cam_max > cam_min:
-    #         cam_norm = (cam - cam_min) / (cam_max - cam_min)
-    #     else:
-    #         cam_norm = np.zeros_like(cam)
+        Returns:
+            points: Array of shape (num_points, 2) containing [x, y] coordinates
+        """
+        # Normalize CAM to 0-1 range
+        cam_min, cam_max = cam.min(), cam.max()
+        if cam_max > cam_min:
+            cam_norm = (cam - cam_min) / (cam_max - cam_min)
+        else:
+            cam_norm = np.zeros_like(cam)
         
-    #     # Find regions above threshold
-    #     high_activation_mask = cam_norm >= intensity_threshold
+        # Find regions above threshold
+        high_activation_mask = cam_norm >= intensity_threshold
         
-    #     if not np.any(high_activation_mask):
-    #         # If no regions above threshold, use the maximum activation point
-    #         max_idx = np.unravel_index(np.argmax(cam_norm), cam_norm.shape)
-    #         return np.array([[max_idx[1], max_idx[0]]])  # Return as [x, y]
+        if not np.any(high_activation_mask):
+            # If no regions above threshold, use the maximum activation point
+            max_idx = np.unravel_index(np.argmax(cam_norm), cam_norm.shape)
+            return np.array([[max_idx[1], max_idx[0]]])  # Return as [x, y]
         
-    #     # Get coordinates of high activation regions
-    #     y_coords, x_coords = np.where(high_activation_mask)
-    #     activation_values = cam_norm[y_coords, x_coords]
+        # Get coordinates of high activation regions
+        y_coords, x_coords = np.where(high_activation_mask)
+        activation_values = cam_norm[y_coords, x_coords]
         
-    #     # Sort by activation strength (descending)
-    #     sorted_indices = np.argsort(activation_values)[::-1]
+        # Sort by activation strength (descending)
+        sorted_indices = np.argsort(activation_values)[::-1]
         
-    #     points = []
-    #     for i in range(min(num_points, len(sorted_indices))):
-    #         idx = sorted_indices[i]
-    #         # Return as [x, y] format (width, height)
-    #         points.append([x_coords[idx], y_coords[idx]])
+        points = []
+        for i in range(min(num_points, len(sorted_indices))):
+            idx = sorted_indices[i]
+            # Return as [x, y] format (width, height)
+            points.append([x_coords[idx], y_coords[idx]])
         
-    #     # If we need more points, add some random high-activation points
-    #     while len(points) < num_points:
-    #         if len(sorted_indices) > 0:
-    #             # Add a random point from high activation regions
-    #             random_idx = np.random.choice(len(sorted_indices))
-    #             idx = sorted_indices[random_idx]
-    #             points.append([x_coords[idx], y_coords[idx]])
-    #         else:
-    #             # Fallback: add center point
-    #             h, w = cam.shape
-    #             points.append([w//2, h//2])
+        # If we need more points, add some random high-activation points
+        while len(points) < num_points:
+            if len(sorted_indices) > 0:
+                # Add a random point from high activation regions
+                random_idx = np.random.choice(len(sorted_indices))
+                idx = sorted_indices[random_idx]
+                points.append([x_coords[idx], y_coords[idx]])
+            else:
+                # Fallback: add center point
+                h, w = cam.shape
+                points.append([w//2, h//2])
         
-    #     return np.array(points[:num_points])
+        return np.array(points[:num_points])
 
-    # def generate_gradcam_and_extract_points(self, image: torch.Tensor, 
-    #                                   initial_points: Tuple[torch.Tensor, torch.Tensor],
-    #                                   num_points: int = 1) -> Tuple[np.ndarray, np.ndarray]:
-    #     """
-    #     Generate GradCAM and extract high-activation points in one step.
+    def generate_gradcam_and_extract_points(self, image: torch.Tensor, 
+                                      initial_points: Tuple[torch.Tensor, torch.Tensor],
+                                      num_points: int = 1) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Generate GradCAM and extract high-activation points in one step.
         
-    #     Args:
-    #         image: Input image tensor
-    #         initial_points: Initial points for GradCAM generation
-    #         num_points: Number of points to extract
+        Args:
+            image: Input image tensor
+            initial_points: Initial points for GradCAM generation
+            num_points: Number of points to extract
         
-    #     Returns:
-    #         cam: Generated GradCAM heatmap
-    #         points: Extracted high-activation points
-    #     """
-    #     # Generate GradCAM
-    #     cam = self.generate_cam(image, initial_points)
+        Returns:
+            cam: Generated GradCAM heatmap
+            points: Extracted high-activation points
+        """
+        # Generate GradCAM
+        cam = self.generate_cam(image, initial_points)
         
-    #     # Extract points from high activation regions
-    #     points = self.extract_high_activation_points(cam, num_points)
+        # Extract points from high activation regions
+        points = self.extract_high_activation_points(cam, num_points)
         
-    #     return cam, points
+        return cam, points
         
     def _extract_pred_masks(self, model_output):
         """Extract prediction masks from various output formats."""
@@ -212,32 +212,78 @@ class SAMUSGradCAM:
         
     
     def visualize_cam(self, original_image: np.ndarray, cam: np.ndarray, 
-                     points: Optional[np.ndarray] = None, save_path: Optional[str] = None, 
-                     alpha: float = 0.4) -> np.ndarray:
+                 points: Optional[np.ndarray] = None, save_path: Optional[str] = None, 
+                 alpha: float = 0.4) -> np.ndarray:
         """Create and save visualization."""
         # Handle 3D image - take middle slice
         if original_image.ndim == 4:
             slice_idx = original_image.shape[-1] // 2
             original_image = original_image[:, :, slice_idx] if original_image.shape[-1] > 3 else original_image[:, :, :, slice_idx]
         
-        # Prepare image
+        # Prepare image - ensure it's 3-channel
         if original_image.ndim == 2:
             original_image = np.stack([original_image] * 3, axis=-1)
+        elif original_image.ndim == 3 and original_image.shape[2] == 1:
+            # Convert single channel to 3-channel
+            original_image = np.concatenate([original_image] * 3, axis=2)
+        elif original_image.ndim == 3 and original_image.shape[2] > 3:
+            # Take only first 3 channels if more than 3
+            original_image = original_image[:, :, :3]
         
+        # Ensure uint8 format
         if original_image.dtype != np.uint8:
-            original_image = (original_image * 255).astype(np.uint8) if original_image.max() <= 1.0 else np.clip(original_image, 0, 255).astype(np.uint8)
+            if original_image.max() <= 1.0:
+                original_image = (original_image * 255).astype(np.uint8)
+            else:
+                original_image = np.clip(original_image, 0, 255).astype(np.uint8)
         
-        # Resize CAM
+        # Resize CAM to match image dimensions
         if cam.shape != original_image.shape[:2]:
             cam = cv2.resize(cam, (original_image.shape[1], original_image.shape[0]))
         
         # Create heatmap
         cam_min, cam_max = float(cam.min()), float(cam.max())
-        cam_normalized = ((cam - cam_min) / (cam_max - cam_min) * 255).astype(np.uint8) if cam_max > cam_min and cam_max > 1e-6 else np.zeros_like(cam, dtype=np.uint8)
+        if cam_max > cam_min and cam_max > 1e-6:
+            cam_normalized = ((cam - cam_min) / (cam_max - cam_min) * 255).astype(np.uint8)
+        else:
+            cam_normalized = np.zeros_like(cam, dtype=np.uint8)
+        
         heatmap = cv2.applyColorMap(cam_normalized, cv2.COLORMAP_JET)
         
+        # Ensure both images have same shape and dtype before blending
+        if original_image.shape != heatmap.shape:
+            print(f"Shape mismatch: original_image {original_image.shape}, heatmap {heatmap.shape}")
+            # Resize heatmap to match original image
+            heatmap = cv2.resize(heatmap, (original_image.shape[1], original_image.shape[0]))
+        
+        # Ensure both are 3-channel and same dtype
+        if len(original_image.shape) != 3 or original_image.shape[2] != 3:
+            if len(original_image.shape) == 2:
+                original_image = cv2.cvtColor(original_image, cv2.COLOR_GRAY2BGR)
+            else:
+                original_image = original_image[:, :, :3]
+        
+        if len(heatmap.shape) != 3 or heatmap.shape[2] != 3:
+            if len(heatmap.shape) == 2:
+                heatmap = cv2.cvtColor(heatmap, cv2.COLOR_GRAY2BGR)
+        
+        # Ensure same dtype
+        original_image = original_image.astype(np.uint8)
+        heatmap = heatmap.astype(np.uint8)
+        
+        # Final shape check
+        if original_image.shape != heatmap.shape:
+            print(f"Final shape mismatch: original_image {original_image.shape}, heatmap {heatmap.shape}")
+            return original_image  # Return original image if blending fails
+        
         # Create overlay
-        overlay = cv2.addWeighted(original_image, 1-alpha, heatmap, alpha, 0)
+        try:
+            overlay = cv2.addWeighted(original_image, 1-alpha, heatmap, alpha, 0)
+        except cv2.error as e:
+            print(f"cv2.addWeighted failed: {e}")
+            print(f"original_image shape: {original_image.shape}, dtype: {original_image.dtype}")
+            print(f"heatmap shape: {heatmap.shape}, dtype: {heatmap.dtype}")
+            return original_image  # Return original image if blending fails
         
         # Add points
         if points is not None:
@@ -245,6 +291,9 @@ class SAMUSGradCAM:
             for i in range(points.shape[0]):
                 if points.shape[1] >= 2:
                     x, y = int(points[i, 0]), int(points[i, 1])
+                    # Ensure points are within image bounds
+                    x = max(0, min(x, overlay.shape[1] - 1))
+                    y = max(0, min(y, overlay.shape[0] - 1))
                     cv2.circle(overlay, (x, y), 6, (0, 255, 0), -1)
                     cv2.circle(overlay, (x, y), 8, (255, 255, 255), 2)
         
