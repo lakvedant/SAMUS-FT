@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from scipy.ndimage import maximum_filter
 
-def generate_click_prompt(img, msk, pt_label = 1):
+def generate_click_prompt(img, msk, pt_label=1):
     # return: img, prompt, prompt mask
     pt_list = []
     msk_list = []
@@ -17,26 +17,23 @@ def generate_click_prompt(img, msk, pt_label = 1):
             msk_s = msk[j,:,:,i]
             indices = torch.nonzero(msk_s)
             if indices.size(0) == 0:
-                # generate a random array between [0-h, 0-h]:
-                random_index = torch.randint(0, h, (2,)).to(device = msk.device)
+                random_index = torch.randint(0, h, (2,)).to(device=msk.device)
                 new_s = msk_s
             else:
                 random_index = random.choice(indices)
                 label = msk_s[random_index[0], random_index[1]]
                 new_s = torch.zeros_like(msk_s)
-                # convert bool tensor to int
-                new_s = (msk_s == label).to(dtype = torch.float)
-                # new_s[msk_s == label] = 1
+                new_s = (msk_s == label).to(dtype=torch.float)
             pt_list_s.append(random_index)
             msk_list_s.append(new_s)
-        pts = torch.stack(pt_list_s, dim=0) # b 2
+        pts = torch.stack(pt_list_s, dim=0)
         msks = torch.stack(msk_list_s, dim=0)
-        pt_list.append(pts)  # c b 2
+        pt_list.append(pts)
         msk_list.append(msks)
-    pt = torch.stack(pt_list, dim=-1) # b 2 d
-    msk = torch.stack(msk_list, dim=-1) # b h w d
-    msk = msk.unsqueeze(1) # b c h w d
-    return img, pt, msk #[b, 2, d], [b, c, h, w, d]
+    pt = torch.stack(pt_list, dim=-1)
+    msk = torch.stack(msk_list, dim=-1)
+    msk = msk.unsqueeze(1)
+    return img, pt, msk
 
 def get_click_prompt(datapack, opt):
     if 'pt' not in datapack:
@@ -53,36 +50,94 @@ def get_click_prompt(datapack, opt):
     pt = (coords_torch, labels_torch)
     return pt
 
+def gradcam_to_binary_mask(cam, img_height, img_width, opt):
+    """Convert GradCAM to binary mask with morphological postprocessing."""
+    # Hyperparameters (configurable via opt)
+    threshold = getattr(opt, 'gradcam_threshold', 0.5)
+    morph_kernel_size = getattr(opt, 'morph_kernel_size', 3)
+    apply_opening = getattr(opt, 'apply_opening', True)
+    apply_closing = getattr(opt, 'apply_closing', True)
+    
+    # Convert CAM to grayscale and normalize
+    if len(cam.shape) > 2:
+        cam_gray = cv2.cvtColor(cam, cv2.COLOR_RGB2GRAY) if cam.shape[-1] == 3 else cam.squeeze()
+    else:
+        cam_gray = cam
+    cam_normalized = (cam_gray - cam_gray.min()) / (cam_gray.max() - cam_gray.min())
+    
+    # RESIZE CAM to match original image dimensions
+    cam_resized = cv2.resize(cam_normalized, (img_width, img_height), interpolation=cv2.INTER_LINEAR)
+    
+    # Apply threshold to create binary mask
+    binary_mask = (cam_resized > threshold).astype(np.uint8) * 255
+    
+    # Apply morphological operations (postprocessing)
+    if apply_opening or apply_closing:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_kernel_size, morph_kernel_size))
+        if apply_opening:
+            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
+        if apply_closing:
+            binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel)
+    
+    return binary_mask
 
 def generate_autoprompt_from_gradcam(imgs, model, gradcam_obj, opt, num_points=1):
-    """Generate click prompts from GradCAM's highest activation areas."""
+    """Generate click prompts from GradCAM using binary mask approach."""
     b, c, h, w = imgs.shape
     all_coords, all_labels = [], []
     
     for batch_idx in range(b):
-        img_single = imgs[batch_idx:batch_idx+1]
-        
         try:
-            # Create initial prompt for GradCAM generation
-            with torch.no_grad():
-                # Use multiple seed points for better coverage
-                seed_points = generate_seed_points(h, w, opt.device)
-                
-                # Generate GradCAM with seed points
-                cam = gradcam_obj.generate_cam(img_single, seed_points)
-                
-                if isinstance(cam, torch.Tensor):
-                    cam_np = cam.detach().cpu().numpy().squeeze()
+            # Create initial seed point (center of image)
+            center_x, center_y = w // 2, h // 2
+            seed_coords = torch.tensor([[center_x, center_y]], dtype=torch.float32, device=opt.device)
+            seed_labels = torch.ones(1, dtype=torch.int, device=opt.device)
+            pt_for_gradcam = (seed_coords.unsqueeze(0), seed_labels.unsqueeze(0))
+            
+            # Generate CAM using gradcam_obj
+            cam = gradcam_obj.generate_cam(imgs[batch_idx:batch_idx+1], pt_for_gradcam)
+            
+            if isinstance(cam, torch.Tensor):
+                cam_np = cam.detach().cpu().numpy().squeeze()
+            else:
+                cam_np = np.array(cam).squeeze()
+            
+            # Convert GradCAM to binary mask
+            binary_mask = gradcam_to_binary_mask(cam_np, h, w, opt)
+            
+            # Convert binary mask to torch tensor and add batch/channel dimensions for generate_click_prompt
+            # binary_mask is (H, W), we need (B, C, H, W, D) format
+            binary_mask_torch = torch.from_numpy(binary_mask / 255.0).float().to(opt.device)  # Normalize to 0-1
+            binary_mask_torch = binary_mask_torch.unsqueeze(0).unsqueeze(0).unsqueeze(-1)  # (1, 1, H, W, 1)
+            
+            # Use generate_click_prompt to get points from the binary mask
+            img_for_prompt = imgs[batch_idx:batch_idx+1].unsqueeze(-1)  # Add depth dimension
+            _, points, _ = generate_click_prompt(img_for_prompt, binary_mask_torch, pt_label=1)
+            
+            # Extract coordinates from the returned points (points shape: [B, 2, D])
+            coords = points[0, :, 0]  # Get first batch, both coordinates, first depth
+            coords_list = [[coords[1].item(), coords[0].item()]]  # Convert [y, x] to [x, y] format
+            
+            # If we need more points, sample more from the mask
+            if num_points > 1:
+                # Find all non-zero points in the binary mask
+                nonzero_y, nonzero_x = np.where(binary_mask > 0)
+                if len(nonzero_y) > 1:
+                    # Randomly sample additional points
+                    additional_points = min(num_points - 1, len(nonzero_y) - 1)
+                    random_indices = np.random.choice(len(nonzero_y), additional_points, replace=False)
+                    for idx in random_indices:
+                        coords_list.append([nonzero_x[idx], nonzero_y[idx]])
                 else:
-                    cam_np = np.array(cam).squeeze()
-                
-                # Extract high-quality points
-                coords = extract_peak_points(cam_np, num_points, h, w)
-                
+                    # If not enough points, duplicate the first point
+                    for _ in range(num_points - 1):
+                        coords_list.append(coords_list[0])
+            
+            coords = coords_list[:num_points]
+            
         except Exception as e:
             print(f"GradCAM failed for batch {batch_idx}: {e}")
-            # Smart fallback: use image-based saliency
-            coords = extract_saliency_points(img_single.cpu().numpy(), num_points, h, w)
+            coords = [[w // 2, h // 2]] * num_points
         
         coords_tensor = torch.tensor(coords, dtype=torch.float32, device=opt.device)
         labels_tensor = torch.ones(len(coords), dtype=torch.int, device=opt.device)
@@ -92,88 +147,16 @@ def generate_autoprompt_from_gradcam(imgs, model, gradcam_obj, opt, num_points=1
     
     return torch.stack(all_coords), torch.stack(all_labels)
 
-def generate_seed_points(height, width, device):
-    """Generate diverse seed points for initial GradCAM generation."""
-    # Use grid-based seed points for better coverage
-    grid_size = 3
-    coords = []
-    for i in range(grid_size):
-        for j in range(grid_size):
-            x = int(width * (j + 1) / (grid_size + 1))
-            y = int(height * (i + 1) / (grid_size + 1))
-            coords.append([x, y])
-    
-    coords_tensor = torch.tensor([coords], dtype=torch.float32, device=device)  # [1, 9, 2]
-    labels_tensor = torch.ones(1, len(coords), dtype=torch.int, device=device)  # [1, 9]
-    
-    return (coords_tensor, labels_tensor)
-
-def extract_peak_points(cam_np, num_points, height, width):
-    """Extract points from true activation peaks using advanced peak detection."""
-    # Resize and normalize
-    if cam_np.shape != (height, width):
-        cam_np = cv2.resize(cam_np, (width, height))
-    
-    cam_np = (cam_np - cam_np.min()) / (cam_np.max() - cam_np.min() + 1e-8)
-    
-    # Apply strong smoothing for better peaks
-    cam_smooth = cv2.GaussianBlur(cam_np, (9, 9), 2.0)
-    
-    # Find local maxima using maximum filter
-    local_maxima = maximum_filter(cam_smooth, size=max(height, width) // 15)
-    peaks = (cam_smooth == local_maxima) & (cam_smooth > np.percentile(cam_smooth, 80))
-    
-    # Get peak coordinates sorted by intensity
-    peak_coords = np.column_stack(np.where(peaks))
-    if len(peak_coords) > 0:
-        intensities = cam_smooth[peak_coords[:, 0], peak_coords[:, 1]]
-        sorted_idx = np.argsort(intensities)[::-1]
-        peak_coords = peak_coords[sorted_idx]
-        
-        coords = []
-        for i in range(min(num_points, len(peak_coords))):
-            y, x = peak_coords[i]
-            coords.append([int(x), int(y)])
-        
-        # Fill remaining points if needed
-        while len(coords) < num_points:
-            # Add slightly offset points from best peak
-            best_y, best_x = peak_coords[0]
-            offset = np.random.randint(-height//20, height//20, 2)
-            new_x = np.clip(best_x + offset[0], 0, width-1)
-            new_y = np.clip(best_y + offset[1], 0, height-1)
-            coords.append([int(new_x), int(new_y)])
-            
-        return coords[:num_points]
-    
-    # Fallback to global maximum
-    max_idx = np.unravel_index(np.argmax(cam_smooth), cam_smooth.shape)
-    return [[int(max_idx[1]), int(max_idx[0])]] * num_points
-
-def extract_saliency_points(img_np, num_points, height, width):
-    """Fallback method using image saliency when GradCAM fails."""
-    img = img_np.squeeze().transpose(1, 2, 0)  # CHW to HWC
-    if img.shape[2] == 3:
-        img = (img * 255).astype(np.uint8)
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = (img.squeeze() * 255).astype(np.uint8)
-    
-    # Simple saliency using Laplacian
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    saliency = np.abs(laplacian)
-    
-    return extract_peak_points(saliency, num_points, height, width)
-
 def get_autoprompt_click_prompt(datapack, model, gradcam_obj, opt, num_points=1):
-    """Main function to get autoprompts from GradCAM."""
+    """Main function to get autoprompts from GradCAM using binary mask approach."""
     imgs = datapack['image']
+    
     coords_torch, labels_torch = generate_autoprompt_from_gradcam(
         imgs, model, gradcam_obj, opt, num_points
     )
     
-    # Format for SAM: [b, num_points, 2] and [b, num_points]
-    if len(coords_torch.shape) == 2:  # [b, 2] -> [b, 1, 2]
+    # Format for SAM: ensure proper dimensions
+    if len(coords_torch.shape) == 2:
         coords_torch = coords_torch.unsqueeze(1)
         labels_torch = labels_torch.unsqueeze(1)
     

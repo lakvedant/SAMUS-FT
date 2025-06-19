@@ -50,7 +50,9 @@ def main():
     
     # NEW: Add GradCAM specific arguments
     parser.add_argument('--enable_gradcam', action='store_true', default=True, help='Enable GradCAM visualization')
-    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-test2', help='Directory to save GradCAM visualizations')
+    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-test6', help='Directory to save GradCAM visualizations')
+    parser.add_argument('--gradcam_threshold', type=float, default=0.5, help='Threshold (0-1) to binarize GradCAM for prompt generation')
+    
 
     args = parser.parse_args()
     opt = get_config(args.task)  # please configure your hyper-parameter

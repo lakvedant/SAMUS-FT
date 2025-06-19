@@ -1,5 +1,6 @@
 # this file is utilized to evaluate the models from different mode: 2D-slice level, 2D-patient level, 3D-patient level
 from tkinter import image_names
+import cv2
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import os
@@ -60,11 +61,10 @@ def initialize_gradcam(model, opt):
         print("Warning: No suitable layers found for GradCAM")
     return None
 
-
 def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx=0):
     """Apply GradCAM visualization if enabled."""
     if gradcam_obj is None or not hasattr(opt, 'gradcam_visualization') or not opt.gradcam_visualization:
-        return
+        return 
     
     try:
         # Ensure proper point format
@@ -130,7 +130,48 @@ def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, op
             alpha=0.4
         )
         
+        # ===== BINARY MASK GENERATION WITH POSTPROCESSING =====
+        # Hyperparameters (configurable via opt)
+        threshold = getattr(opt, 'gradcam_threshold', 0.5)
+        morph_kernel_size = getattr(opt, 'morph_kernel_size', 3)
+        apply_opening = getattr(opt, 'apply_opening', True)
+        apply_closing = getattr(opt, 'apply_closing', True)
+        
+        # Get original image dimensions
+        img_height, img_width = img_np.shape[:2]
+        
+        # Convert CAM to grayscale and normalize
+        if len(cam.shape) > 2:
+            cam_gray = cv2.cvtColor(cam, cv2.COLOR_RGB2GRAY) if cam.shape[-1] == 3 else cam.squeeze()
+        else:
+            cam_gray = cam
+        cam_normalized = (cam_gray - cam_gray.min()) / (cam_gray.max() - cam_gray.min())
+        
+        # RESIZE CAM to match original image dimensions
+        cam_resized = cv2.resize(cam_normalized, (img_width, img_height), interpolation=cv2.INTER_LINEAR)
+        
+        # Apply threshold to create binary mask
+        binary_mask = (cam_resized > threshold).astype(np.uint8) * 255
+        
+        # Apply morphological operations (postprocessing)
+        if apply_opening or apply_closing:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_kernel_size, morph_kernel_size))
+            if apply_opening:
+                binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_OPEN, kernel)
+            if apply_closing:
+                binary_mask = cv2.morphologyEx(binary_mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Save both grayscale CAM and binary mask
+        # gray_path = os.path.join(gradcam_dir, f"cam_gray_{base_name}.png")
+        mask_path = os.path.join(gradcam_dir, f"mask_{base_name}.png")
+        # cv2.imwrite(gray_path, (cam_resized * 255).astype(np.uint8))
+        cv2.imwrite(mask_path, binary_mask)
+        
         print(f"GradCAM visualization saved to: {save_path}")
+        # print(f"Grayscale CAM saved to: {gray_path}")
+        print(f"Binary mask saved to: {mask_path}")
+        print(f"Original image size: {img_width}x{img_height}, CAM size: {cam_gray.shape}")
+        print(f"Threshold: {threshold}, Kernel size: {morph_kernel_size}")
         
     except Exception as e:
         print(f"GradCAM visualization failed: {e}")
