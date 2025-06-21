@@ -35,36 +35,39 @@ def obtain_patien_id(filename):
 
 def initialize_gradcam(model, opt):
     """Initialize GradCAM if visualization is enabled."""
-    if hasattr(opt, 'gradcam_visualization') and opt.gradcam_visualization:
         # Try different layer combinations for SAMUS
-        possible_layers = [
+    possible_layers = [
             ['image_encoder.neck.2']
             # ['image_encoder.neck.2', 'image_encoder.neck.0'],  # Neck layers 
             # ['image_encoder.blocks.11.norm1', 'image_encoder.blocks.8.norm1'],  # Transformer blocks
             # ['image_encoder.blocks.-1.norm1'],  # Last block
-        ]
+    ]
         
-        model_layers = [name for name, _ in model.named_modules()]
+    model_layers = [name for name, _ in model.named_modules()]
         
-        for target_layers in possible_layers:
-            if all(layer in model_layers for layer in target_layers):
-                print(f"Using GradCAM layers: {target_layers}")
-                return SAMUSGradCAM(model, target_layers)
+    for target_layers in possible_layers:
+        if all(layer in model_layers for layer in target_layers):
+            print(f"Using GradCAM layers: {target_layers}")
+            return SAMUSGradCAM(model, target_layers)
         
-        # Fallback - use any available layer
-        available_layers = [name for name in model_layers if 'norm' in name or 'conv' in name]
-        if available_layers:
-            selected = available_layers[-2:] if len(available_layers) >= 2 else [available_layers[-1]]
-            print(f"Fallback GradCAM layers: {selected}")
-            return SAMUSGradCAM(model, selected)
+        # # Fallback - use any available layer
+        # available_layers = [name for name in model_layers if 'norm' in name or 'conv' in name]
+        # if available_layers:
+        #     selected = available_layers[-2:] if len(available_layers) >= 2 else [available_layers[-1]]
+        #     print(f"Fallback GradCAM layers: {selected}")
+        #     return SAMUSGradCAM(model, selected)
         
-        print("Warning: No suitable layers found for GradCAM")
+        # print("Warning: No suitable layers found for GradCAM")
     return None
 
-def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx=0):
+def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, opt, batch_idx=0, skip_second_generation=False):
     """Apply GradCAM visualization if enabled."""
     if gradcam_obj is None or not hasattr(opt, 'gradcam_visualization') or not opt.gradcam_visualization:
         return 
+    
+    if skip_second_generation:
+        print("Skipping second GradCAM generation - only first CAM will be saved")
+        return
     
     try:
         # Ensure proper point format
@@ -129,10 +132,11 @@ def apply_gradcam_visualization(gradcam_obj, model, imgs, pt, image_filename, op
             save_path=save_path,
             alpha=0.4
         )
+        print(f"Second GradCAM visualization saved to: {save_path}")
         
         # ===== BINARY MASK GENERATION WITH POSTPROCESSING =====
         # Hyperparameters (configurable via opt)
-        threshold = getattr(opt, 'gradcam_threshold', 0.5)
+        threshold = getattr(opt, 'gradcam_threshold', 0.7)
         morph_kernel_size = getattr(opt, 'morph_kernel_size', 3)
         apply_opening = getattr(opt, 'apply_opening', True)
         apply_closing = getattr(opt, 'apply_closing', True)

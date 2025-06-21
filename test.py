@@ -50,8 +50,8 @@ def main():
     
     # NEW: Add GradCAM specific arguments
     parser.add_argument('--enable_gradcam', action='store_true', default=True, help='Enable GradCAM visualization')
-    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-test6', help='Directory to save GradCAM visualizations')
-    parser.add_argument('--gradcam_threshold', type=float, default=0.5, help='Threshold (0-1) to binarize GradCAM for prompt generation')
+    parser.add_argument('--gradcam_output_dir', type=str, default='./gradcam_results-test8', help='Directory to save GradCAM visualizations')
+    parser.add_argument('--gradcam_threshold', type=float, default=0.7, help='Threshold (0-1) to binarize GradCAM for prompt generation')
     
 
     args = parser.parse_args()
@@ -59,10 +59,10 @@ def main():
     print("task", args.task, "checkpoints:", opt.load_path) 
     opt.mode = "val"
     #opt.classes=2
-    opt.visual = True
+    opt.visual = False
     
     # MODIFIED: Enable GradCAM visualization based on argument
-    opt.gradcam_visualization = True
+    opt.gradcam_visualization = False
     
     # MODIFIED: Set custom result path for GradCAM if specified
     if args.gradcam_output_dir:
